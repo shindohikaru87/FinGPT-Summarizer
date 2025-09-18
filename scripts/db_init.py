@@ -1,16 +1,24 @@
 #!/usr/bin/env python3
 """
-Initialize the database schema.
+Initialize (or reset) the database schema.
 
 Usage:
   python scripts/db_init.py
-  python scripts/db_init.py --drop          # drop then create
-  python scripts/db_init.py --drop --vacuum # SQLite: VACUUM after recreate
+  python scripts/db_init.py --drop                 # drop then create
+  python scripts/db_init.py --drop --yes          # no interactive prompt
+  python scripts/db_init.py --vacuum              # SQLite: VACUUM after (re)create
+  python scripts/db_init.py --wal                 # SQLite: enable WAL + NORMAL sync
+  python scripts/db_init.py --fk                  # SQLite: enforce foreign_keys=ON
+  python scripts/db_init.py --reset-status        # set NULL/empty article.status -> READY_FOR_SUMMARY
+  python scripts/db_init.py --truncate-summaries  # delete from summaries (keep articles)
+  python scripts/db_init.py --reindex             # rebuild indexes (SQLite)
 
 Env:
   DATABASE_URL=sqlite:///./fingpt.db (default)  | e.g. postgresql+psycopg://user:pass@host/db
   SQL_ECHO=1  (optional: echo SQL)
 """
+from __future__ import annotations
+
 import argparse
 import sys
 from pathlib import Path
@@ -19,32 +27,122 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from sqlalchemy import text
+from sqlalchemy.engine import Engine
 from src.app.db import engine, DATABASE_URL
-from src.app.models import Base
+from src.app.models import Base, Article, Summary
 
 
-def _is_sqlite(url: str) -> bool:
+def _is_sqlite_url(url: str) -> bool:
     return url.startswith("sqlite")
+
+def _is_sqlite_engine(engine: Engine) -> bool:
+    try:
+        return engine.url.get_backend_name() == "sqlite"
+    except Exception:
+        return _is_sqlite_url(str(engine.url))
+
+def _confirm(prompt: str) -> bool:
+    try:
+        return input(f"{prompt} [y/N]: ").strip().lower() == "y"
+    except EOFError:
+        return False
+
+def _sqlite_exec(sql: str) -> None:
+    with engine.begin() as conn:
+        conn.execute(text(sql))
+
+def enable_sqlite_wal():
+    if _is_sqlite_engine(engine):
+        _sqlite_exec("PRAGMA journal_mode=WAL;")
+        _sqlite_exec("PRAGMA synchronous=NORMAL;")
+        print("SQLite: WAL enabled, synchronous=NORMAL.")
+
+def enable_sqlite_fk():
+    if _is_sqlite_engine(engine):
+        _sqlite_exec("PRAGMA foreign_keys=ON;")
+        print("SQLite: foreign_keys=ON.")
+
+def vacuum_sqlite():
+    if _is_sqlite_engine(engine):
+        _sqlite_exec("VACUUM;")
+        print("SQLite: VACUUM complete.")
+
+def reset_article_status():
+    """Set NULL/empty statuses to READY_FOR_SUMMARY (idempotent)."""
+    from sqlalchemy import update, or_
+    with engine.begin() as conn:
+        stmt = update(Article).where(
+            or_(Article.status.is_(None), Article.status == "")
+        ).values(status="READY_FOR_SUMMARY")
+        res = conn.execute(stmt)
+        print(f"Article status reset → READY_FOR_SUMMARY (rows affected: {res.rowcount}).")
+
+def truncate_summaries():
+    """Delete all rows from summaries (keeps articles)."""
+    with engine.begin() as conn:
+        # SQLite supports simple DELETE; Postgres supports TRUNCATE CASCADE if needed.
+        if _is_sqlite_engine(engine):
+            conn.execute(text("DELETE FROM summaries;"))
+        else:
+            conn.execute(text("TRUNCATE TABLE summaries;"))
+    print("Cleared table: summaries.")
+
+def reindex_sqlite():
+    if _is_sqlite_engine(engine):
+        _sqlite_exec("REINDEX;")
+        print("SQLite: REINDEX complete.")
 
 def main():
     ap = argparse.ArgumentParser(description="Initialize DB schema.")
     ap.add_argument("--drop", action="store_true", help="Drop all tables first.")
+    ap.add_argument("--yes", action="store_true", help="Assume 'yes' to destructive prompts.")
     ap.add_argument("--vacuum", action="store_true", help="SQLite: VACUUM after changes.")
+    ap.add_argument("--wal", action="store_true", help="SQLite: enable WAL mode + NORMAL sync.")
+    ap.add_argument("--fk", action="store_true", help="SQLite: enforce PRAGMA foreign_keys=ON.")
+    ap.add_argument("--reset-status", action="store_true", help="Set NULL/empty article.status to READY_FOR_SUMMARY.")
+    ap.add_argument("--truncate-summaries", action="store_true", help="Delete all rows from summaries table.")
+    ap.add_argument("--reindex", action="store_true", help="SQLite: REINDEX after (re)create.")
     args = ap.parse_args()
 
     print(f"DB URL: {DATABASE_URL}")
+
+    # Optional PRAGMAs early (non-destructive)
+    if args.fk:
+        enable_sqlite_fk()
+    if args.wal:
+        enable_sqlite_wal()
+
+    # Destructive operations
+    if args.truncate_summaries:
+        if args.yes or _confirm("This will DELETE ALL summaries. Continue?"):
+            truncate_summaries()
+        else:
+            print("Aborted.")
+
     if args.drop:
-        print("Dropping all tables…")
-        Base.metadata.drop_all(engine)
+        if args.yes or _confirm("This will DROP ALL tables. Continue?"):
+            print("Dropping all tables…")
+            Base.metadata.drop_all(engine)
+        else:
+            print("Aborted drop.")
 
     print("Creating tables (if not exist)…")
     Base.metadata.create_all(engine)
 
-    if args.vacuum and _is_sqlite(DATABASE_URL):
-        print("VACUUM (SQLite)…")
-        with engine.begin() as conn:
-            conn.execute(text("VACUUM"))
-    print("✅ Done.")
+    # Hygiene / maintenance
+    if args.reset_status:
+        reset_article_status()
+
+    if args.reindex:
+        reindex_sqlite()
+
+    if args.vacuum:
+        vacuum_sqlite()
+
+    # Friendly summary
+    backend = "SQLite" if _is_sqlite_engine(engine) else "Non-SQLite"
+    print(f"✅ Done. Engine backend: {backend}")
+    print("Tables present:", ", ".join(sorted(t.name for t in Base.metadata.sorted_tables)))
 
 if __name__ == "__main__":
     main()
