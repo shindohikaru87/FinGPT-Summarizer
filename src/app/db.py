@@ -17,7 +17,14 @@ else:
 
 engine = create_engine(DATABASE_URL, **engine_kwargs)
 
-SessionLocal = sessionmaker(bind=engine, autoflush=False, autocommit=False, future=True)
+# src/app/db.py
+SessionLocal = sessionmaker(
+    bind=engine,
+    autoflush=False,
+    autocommit=False,
+    future=True,
+    expire_on_commit=False,   # <-- add this
+)
 
 @contextmanager
 def session_scope():
