@@ -6,6 +6,25 @@ __pycache__/
 # C extensions
 *.so
 
+# Database
+*.db
+*.sqlite3
+*.db-journal
+
+# Config files
+*.env
+*.env.*.local
+.env.local
+.env.*.local
+.env.*.backup
+.env.backup
+*.ini
+*.cfg
+*.toml
+*.yaml
+*.yml
+*.json
+
 # Distribution / packaging
 .Python
 build/
