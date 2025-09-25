@@ -37,3 +37,18 @@ def session_scope():
         raise
     finally:
         session.close()
+
+def get_engine():
+    """Compatibility shim: return the module-level engine."""
+    return engine
+
+def sessionmaker_from_engine(e):
+    """Compatibility shim: return a sessionmaker bound to the given engine."""
+    # You could just return SessionLocal, but this keeps it explicit.
+    return sessionmaker(
+        bind=e,
+        autoflush=False,
+        autocommit=False,
+        future=True,
+        expire_on_commit=False,
+    )
