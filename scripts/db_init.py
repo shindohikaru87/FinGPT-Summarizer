@@ -12,10 +12,7 @@ Usage:
   python scripts/db_init.py --reset-status        # set NULL/empty article.status -> READY_FOR_SUMMARY
   python scripts/db_init.py --truncate-summaries  # delete from summaries (keep articles)
   python scripts/db_init.py --reindex             # rebuild indexes (SQLite)
-
-Env:
-  DATABASE_URL=sqlite:///./fingpt.db (default)  | e.g. postgresql+psycopg://user:pass@host/db
-  SQL_ECHO=1  (optional: echo SQL)
+  python scripts/db_init.py --show-tables         # list current DB tables
 """
 from __future__ import annotations
 
@@ -26,10 +23,17 @@ from pathlib import Path
 # Ensure repo root on path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from sqlalchemy import text
+from sqlalchemy import text, inspect
 from sqlalchemy.engine import Engine
+
 from src.app.db import engine, DATABASE_URL
-from src.app.models import Base, Article, Summary
+import src.app.models as m  # import all models to register tables
+Base = m.Base
+Article = m.Article
+Summary = m.Summary
+Embedding = m.Embedding
+Cluster = m.Cluster
+ArticleCluster = m.ArticleCluster
 
 
 def _is_sqlite_url(url: str) -> bool:
@@ -80,7 +84,6 @@ def reset_article_status():
 def truncate_summaries():
     """Delete all rows from summaries (keeps articles)."""
     with engine.begin() as conn:
-        # SQLite supports simple DELETE; Postgres supports TRUNCATE CASCADE if needed.
         if _is_sqlite_engine(engine):
             conn.execute(text("DELETE FROM summaries;"))
         else:
@@ -92,6 +95,16 @@ def reindex_sqlite():
         _sqlite_exec("REINDEX;")
         print("SQLite: REINDEX complete.")
 
+def show_tables():
+    insp = inspect(engine)
+    tables = insp.get_table_names()
+    if not tables:
+        print("No tables found in current database.")
+    else:
+        print("Current tables:")
+        for t in sorted(tables):
+            print(f"  - {t}")
+
 def main():
     ap = argparse.ArgumentParser(description="Initialize DB schema.")
     ap.add_argument("--drop", action="store_true", help="Drop all tables first.")
@@ -102,11 +115,16 @@ def main():
     ap.add_argument("--reset-status", action="store_true", help="Set NULL/empty article.status to READY_FOR_SUMMARY.")
     ap.add_argument("--truncate-summaries", action="store_true", help="Delete all rows from summaries table.")
     ap.add_argument("--reindex", action="store_true", help="SQLite: REINDEX after (re)create.")
+    ap.add_argument("--show-tables", action="store_true", help="List current DB tables and exit.")
     args = ap.parse_args()
 
     print(f"DB URL: {DATABASE_URL}")
 
-    # Optional PRAGMAs early (non-destructive)
+    if args.show_tables:
+        show_tables()
+        sys.exit(0)
+
+    # Optional PRAGMAs early
     if args.fk:
         enable_sqlite_fk()
     if args.wal:
@@ -132,14 +150,11 @@ def main():
     # Hygiene / maintenance
     if args.reset_status:
         reset_article_status()
-
     if args.reindex:
         reindex_sqlite()
-
     if args.vacuum:
         vacuum_sqlite()
 
-    # Friendly summary
     backend = "SQLite" if _is_sqlite_engine(engine) else "Non-SQLite"
     print(f"✅ Done. Engine backend: {backend}")
     print("Tables present:", ", ".join(sorted(t.name for t in Base.metadata.sorted_tables)))
