@@ -1,0 +1,65 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8"/>
+  <title>FinGPT Clusters</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1"/>
+  <link rel="stylesheet" href="./css/styles.css"/>
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand">FinGPT • Clusters</div>
+    <nav>
+      <a href="./search.html">Search</a>
+      <a class="active" href="./clusters.html">Clusters</a>
+    </nav>
+  </header>
+
+  <main class="container">
+    <section class="card row gap">
+      <label class="lbl">Top sample titles
+        <select id="topTitles" class="select">
+          <option>1</option><option selected>3</option><option>5</option><option>10</option>
+        </select>
+      </label>
+      <button id="btnLoad" class="btn">Load</button>
+    </section>
+
+    <section id="clusters" class="list mt8"></section>
+  </main>
+
+  <script src="./js/api.js"></script>
+  <script>
+    const apiPort = (location.search.match(/api=(\d+)/)||[])[1] || "8000";
+    const API = makeApi(`http://localhost:${apiPort}`);
+
+    const topEl = document.getElementById('topTitles');
+    const outEl = document.getElementById('clusters');
+    document.getElementById('btnLoad').onclick = loadClusters;
+
+    async function loadClusters(){
+      const data = await API.clusters({ top_titles: Number(topEl.value) });
+      outEl.innerHTML = "";
+      data.clusters.forEach(c => {
+        const d = document.createElement('div');
+        d.className = 'item';
+        const titles = c.sample_titles.map(t=>`<li>${escapeHtml(t)}</li>`).join("");
+        d.innerHTML = `
+          <div class="row space">
+            <div class="title">${escapeHtml(c.label || "(unlabeled)")}</div>
+            <div class="badge">#${c.cluster_id}</div>
+          </div>
+          <div class="muted small">run_id ${c.run_id} • ${c.size} articles</div>
+          <ul class="bullets">${titles}</ul>
+        `;
+        outEl.appendChild(d);
+      });
+    }
+
+    function escapeHtml(s){return s.replace(/[&<>"']/g,m=>({ "&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;" }[m]));}
+
+    // auto-load
+    loadClusters();
+  </script>
+</body>
+</html>

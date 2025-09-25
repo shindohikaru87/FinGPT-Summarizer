@@ -1,0 +1,43 @@
+<!doctype html>
+<meta charset="utf-8"/>
+<title>FinGPT Search</title>
+<style>
+  body { font: 14px/1.5 system-ui, -apple-system, Segoe UI, Roboto; margin: 24px; max-width: 980px; }
+  header { display:flex; gap:8px; align-items:center; margin-bottom: 12px; }
+  input[type=text]{ flex:1; padding:10px 12px; border:1px solid #ccc; border-radius:10px; }
+  button{ padding:10px 14px; border-radius:10px; border:1px solid #ccc; background:#fafafa; cursor:pointer;}
+  .hit { border: 1px solid #ddd; border-radius: 12px; padding: 12px; margin: 10px 0; background: #fff; }
+  .meta { color: #666; font-size: 12px; margin-top: 4px; }
+</style>
+<header>
+  <input id="q" type="text" placeholder="Type keywords (e.g., fed rates, earnings, oil)..."/>
+  <button id="go">Search</button>
+</header>
+<div id="out"></div>
+<script>
+const API = `http://localhost:${location.search.match(/api=(\d+)/)?.[1] ?? 8000}`;
+async function run(p=1) {
+  const q = document.getElementById('q').value.trim();
+  if (!q) return;
+  const url = new URL(API + '/search');
+  url.searchParams.set('q', q);
+  url.searchParams.set('page', p);
+  url.searchParams.set('page_size', 20);
+  const r = await fetch(url);
+  const js = await r.json();
+  const out = document.getElementById('out');
+  out.innerHTML = `<p><b>${js.returned}</b> / ${js.total_candidates} results</p>`;
+  js.hits.forEach(h => {
+    const d = document.createElement('div');
+    d.className = 'hit';
+    d.innerHTML = `
+      <div><a href="${h.url}" target="_blank"><b>${h.title || '(untitled)'}</b></a></div>
+      <div class="meta">${h.source ?? ''} • ${h.published_at ?? 'N/A'} • score ${Number(h.score).toFixed(3)} ${h.cluster_label ? '• ' + h.cluster_label : ''}</div>
+      ${h.summary_text ? `<div style="margin-top:6px; white-space:pre-wrap;">${h.summary_text}</div>` : ''}
+    `;
+    out.appendChild(d);
+  });
+}
+document.getElementById('go').onclick = () => run(1);
+document.getElementById('q').addEventListener('keydown', e => { if (e.key === 'Enter') run(1); });
+</script>

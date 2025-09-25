@@ -1,0 +1,157 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8"/>
+  <title>FinGPT Search</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1"/>
+  <link rel="stylesheet" href="./css/styles.css"/>
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand">FinGPT • Search</div>
+    <nav>
+      <a href="./search.html">Search</a>
+      <a href="./clusters.html">Clusters</a>
+      <a href="https://github.com/" target="_blank" class="muted">Git</a>
+    </nav>
+  </header>
+
+  <main class="container">
+    <section class="card">
+      <div class="row gap">
+        <input id="q" class="input flex1" placeholder="Type keywords… (e.g., fed, earnings, oil)"/>
+        <button id="btnSearch" class="btn">Search</button>
+      </div>
+      <div class="row gap mt8">
+        <label class="lbl">Page size
+          <select id="pageSize" class="select">
+            <option>10</option><option selected>20</option><option>50</option><option>100</option>
+          </select>
+        </label>
+        <label class="lbl">Window (hours)
+          <select id="windowHours" class="select">
+            <option value="72">72</option>
+            <option value="168">168</option>
+            <option value="720" selected>720</option>
+            <option value="2160">2160</option>
+          </select>
+        </label>
+        <label class="lbl">Mode
+          <select id="mode" class="select">
+            <option value="hybrid" selected>Hybrid</option>
+            <option value="keyword">Keyword-only</option>
+            <option value="embedding">Embedding-only</option>
+          </select>
+        </label>
+        <label class="lbl">Cluster labels
+          <input id="useLatestRun" type="checkbox" checked/>
+        </label>
+      </div>
+    </section>
+
+    <section id="resultsMeta" class="muted mt8"></section>
+
+    <section id="results" class="list mt8"></section>
+
+    <section class="row gap center mt12">
+      <button id="prev" class="btn btn-ghost">Prev</button>
+      <span id="pageInfo" class="muted"></span>
+      <button id="next" class="btn btn-ghost">Next</button>
+    </section>
+  </main>
+
+  <script src="./js/api.js"></script>
+  <script>
+    // ---- simple state ----
+    let page = 1;
+
+    // read ?api=port override (defaults to 8000)
+    const apiPort = (location.search.match(/api=(\d+)/)||[])[1] || "8000";
+    const API = makeApi(`http://localhost:${apiPort}`);
+
+    const qEl = document.getElementById('q');
+    const pageSizeEl = document.getElementById('pageSize');
+    const windowHoursEl = document.getElementById('windowHours');
+    const modeEl = document.getElementById('mode');
+    const useLatestRunEl = document.getElementById('useLatestRun');
+
+    const resultsEl = document.getElementById('results');
+    const metaEl = document.getElementById('resultsMeta');
+    const pageInfoEl = document.getElementById('pageInfo');
+    const btnPrev = document.getElementById('prev');
+    const btnNext = document.getElementById('next');
+
+    async function runSearch(goTo=1) {
+      page = goTo;
+      const q = qEl.value.trim();
+      if(!q) { resultsEl.innerHTML = ""; metaEl.textContent = "Type some keywords."; return; }
+
+      // Mode toggles weights via query (your API always computes hybrid internally).
+      // We simulate by post-filtering scores if needed.
+      const ps = Number(pageSizeEl.value);
+      const wh = Number(windowHoursEl.value);
+      const useLatestRun = useLatestRunEl.checked;
+
+      const data = await API.search({
+        q,
+        page,
+        page_size: ps,
+        window_hours: wh,
+        use_latest_run: useLatestRun
+      });
+
+      // (Optional) client-side mode tweak: zero-out the opposing term to visualize
+      if (modeEl.value !== "hybrid") {
+        // Keyword-only: re-score by title+summary occurrences (quick heuristic)
+        if (modeEl.value === "keyword") {
+          const terms = q.toLowerCase().split(/\s+/).filter(Boolean);
+          for (const h of data.hits) {
+            const t = (h.title||"").toLowerCase();
+            const s = (h.summary_text||"").toLowerCase();
+            let sc=0; for (const term of terms){ sc += (t.match(new RegExp(term,"g"))||[]).length*2 + (s.match(new RegExp(term,"g"))||[]).length; }
+            h.score = sc;
+          }
+          data.hits.sort((a,b)=>b.score-a.score);
+        }
+        // Embedding-only: keep as-is (server already includes embedding in score)
+      }
+
+      renderResults(data);
+    }
+
+    function renderResults(js) {
+      metaEl.textContent = `${js.returned} / ${js.total_candidates} results`;
+      pageInfoEl.textContent = `Page ${js.page}`;
+
+      resultsEl.innerHTML = "";
+      js.hits.forEach(h => {
+        const div = document.createElement('div');
+        div.className = 'item';
+        div.innerHTML = `
+          <div class="row space">
+            <div class="title"><a href="${h.url}" target="_blank">${escapeHtml(h.title || "(untitled)")}</a></div>
+            <div class="score">score ${Number(h.score).toFixed(3)}</div>
+          </div>
+          <div class="muted small">${escapeHtml(h.source || "")} • ${h.published_at || "N/A"} ${h.cluster_label ? " • " + escapeHtml(h.cluster_label) : ""}</div>
+          ${h.summary_text ? `<pre class="summary">${escapeHtml(h.summary_text)}</pre>` : ""}
+        `;
+        resultsEl.appendChild(div);
+      });
+
+      btnPrev.disabled = (page <= 1);
+      btnNext.disabled = (js.returned === 0 || (page * Number(pageSizeEl.value) >= js.total_candidates));
+    }
+
+    document.getElementById('btnSearch').onclick = () => runSearch(1);
+    qEl.addEventListener('keydown', e => { if (e.key === 'Enter') runSearch(1); });
+    btnPrev.onclick = () => runSearch(page-1);
+    btnNext.onclick = () => runSearch(page+1);
+
+    // small helpers
+    function escapeHtml(s){return s.replace(/[&<>"']/g,m=>({ "&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;" }[m]));}
+
+    // autofocus for convenience
+    qEl.focus();
+  </script>
+</body>
+</html>
