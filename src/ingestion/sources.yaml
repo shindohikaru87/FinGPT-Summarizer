@@ -1,0 +1,333 @@
+# src/ingestion/sources.yaml
+# High-volume starter pack. Safe defaults, broader seeds, paging, and higher caps.
+# Tweak CSS per site if your parser needs different selectors.
+
+sources:
+  # --- CNBC ---
+  - name: cnbc-markets
+    base: "https://www.cnbc.com"
+    discovery:
+      urls:
+        - "https://www.cnbc.com/markets/"
+        - "https://www.cnbc.com/markets/?page=2"
+        - "https://www.cnbc.com/markets/?page=3"
+        - "https://www.cnbc.com/markets/?page=4"
+        - "https://www.cnbc.com/markets/?page=5"
+      follow_links_css:
+        - 'a[href*="/202"]'
+        - 'a.Card-title'
+        - 'a[href^="https://www.cnbc.com/202"]'
+      allow_patterns:
+        - "^/202[45]/\\d{2}/\\d{2}/"
+        - "^https?://www\\.cnbc\\.com/202[45]/\\d{2}/\\d{2}/"
+      deny_patterns:
+        - "/video/"
+        - "/live/"
+        - "/pro/"
+        - "/make-it/"
+        - "/select/"
+        - "/events/"
+      js_render: false
+      max_new_urls: 150
+    article:
+      js_render: false
+      title_css: "h1"
+      body_css: >
+        article p,
+        .ArticleBody-articleBody p,
+        .group p,
+        [data-component='ArticleBody'] p,
+        .ArticleBody-wrapper p
+      time_css: "time"
+      time_attr: "datetime"
+      author_css: 'a[rel="author"], .Author-authorName a'
+    rate: { per_minute: 40, burst: 12 }
+    compliance: { obey_robots: false, user_agent: "Mozilla/5.0 ..." }
+
+  # --- Reuters (Markets) ---
+  - name: reuters-markets
+    base: "https://www.reuters.com"
+    discovery:
+      urls:
+        - "https://www.reuters.com/markets/"
+        - "https://www.reuters.com/markets/us/"
+        - "https://www.reuters.com/markets/asia/"
+        - "https://www.reuters.com/markets/europe/"
+      follow_links_css:
+        - 'a[href^="/markets/"]'
+        - 'a[href^="https://www.reuters.com/markets/"]'
+      allow_patterns:
+        - "^/markets/.*"
+        - "^https?://www\\.reuters\\.com/markets/.*"
+      deny_patterns:
+        - "/pictures/"
+        - "/graphics/"
+        - "/live/"
+        - "/video/"
+      js_render: false
+      max_new_urls: 150
+    article:
+      js_render: false
+      title_css: "h1"
+      body_css: "article p"
+      time_css: "time"
+      time_attr: "datetime"
+      author_css: 'a[href*="/authors/"]'
+    rate: { per_minute: 45, burst: 15 }
+    compliance: { obey_robots: false, user_agent: "Mozilla/5.0 ..." }
+
+  # --- MarketWatch ---
+  - name: marketwatch-latest
+    base: "https://www.marketwatch.com"
+    discovery:
+      urls:
+        - "https://www.marketwatch.com/latest-news"
+        - "https://www.marketwatch.com/markets"
+      follow_links_css:
+        - 'a[href*="/story/"]'
+      allow_patterns:
+        - "^/story/.*"
+        - "^https?://www\\.marketwatch\\.com/story/.*"
+      deny_patterns:
+        - "/video/"
+      js_render: false
+      max_new_urls: 120
+    article:
+      js_render: false
+      title_css: "h1.article__headline"
+      body_css: "div.article__content p"
+      time_css: "time"
+      time_attr: "datetime"
+    rate: { per_minute: 35, burst: 12 }
+    compliance: { obey_robots: false, user_agent: "Mozilla/5.0 ..." }
+
+  # --- Yahoo Finance ---
+  - name: yahoo-finance
+    base: "https://finance.yahoo.com"
+    discovery:
+      urls:
+        - "https://finance.yahoo.com/topic/stock-market-news/"
+        - "https://finance.yahoo.com/topic/crypto/"
+        - "https://finance.yahoo.com/topic/economic-news/"
+      follow_links_css:
+        - 'a[href*="/news/"]'
+      allow_patterns:
+        - "^/news/.*"
+        - "^https?://finance\\.yahoo\\.com/news/.*"
+      deny_patterns:
+        - "/video/"
+      js_render: true
+      max_new_urls: 120
+    article:
+      js_render: true
+      title_css: "h1"
+      body_css: "article p, [data-test-locator='mega'] p"
+      time_css: "time"
+      time_attr: "datetime"
+    rate: { per_minute: 30, burst: 10 }
+    compliance: { obey_robots: false, user_agent: "Mozilla/5.0 ..." }
+
+  # --- AP News (Business + Tech hubs & RSS) ---
+  - name: ap-business
+    base: "https://apnews.com"
+    discovery:
+      urls:
+        - "https://apnews.com/hub/business"
+        - "https://apnews.com/hub/technology"
+        - "https://apnews.com/hub/ap-top-news?utm_source=apnews.com&utm_medium=referral&utm_campaign=ap-rss"
+      follow_links_css:
+        - 'a[href^="/article/"]'
+        - 'a[href^="https://apnews.com/article/"]'
+      allow_patterns:
+        - "^/article/.*"
+        - "^https?://apnews\\.com/article/.*"
+      deny_patterns: []
+      js_render: false
+      max_new_urls: 150
+    article:
+      js_render: false
+      title_css: "h1"
+      body_css: "div.RichTextStoryBody p, article p"
+      time_css: "time, meta[property='article:published_time']"
+      time_attr: "datetime,content"
+      author_css: ".byline a, span.Component-bylines-0-2-32 a"
+    rate: { per_minute: 40, burst: 12 }
+    compliance: { obey_robots: false, user_agent: "Mozilla/5.0 ..." }
+
+  # --- The Block ---
+  - name: theblock-latest
+    base: "https://www.theblock.co"
+    discovery:
+      urls:
+        - "https://www.theblock.co/latest"
+        - "https://www.theblock.co/latest?page=2"
+        - "https://www.theblock.co/latest?page=3"
+        - "https://www.theblock.co/category/markets"
+        - "https://www.theblock.co/category/business"
+      follow_links_css:
+        - 'a[href^="/post/"]'
+        - 'a[href*="/post/"]'
+      allow_patterns:
+        - "^/post/\\d+/"
+        - "^https?://www\\.theblock\\.co/post/\\d+/"
+      deny_patterns:
+        - "/podcasts/"
+        - "/research/"
+      js_render: true
+      max_new_urls: 100
+    article:
+      js_render: true
+      title_css: "h1"
+      body_css: "article p, div[class*='articleBody'] p"
+      time_css: "time"
+      time_attr: "datetime"
+      author_css: 'a[href*="/author/"]'
+    rate: { per_minute: 30, burst: 10 }
+    compliance: { obey_robots: false, user_agent: "Mozilla/5.0 ..." }
+
+  # --- CoinDesk ---
+  - name: coindesk-latest
+    base: "https://www.coindesk.com"
+    discovery:
+      urls:
+        - "https://www.coindesk.com/latest/"
+        - "https://www.coindesk.com/markets/"
+        - "https://www.coindesk.com/business/"
+        - "https://www.coindesk.com/policy/"
+        - "https://www.coindesk.com/latest/?page=2"
+        - "https://www.coindesk.com/latest/?page=3"
+      follow_links_css:
+        - 'a[href]'
+      allow_patterns:
+        - "/\\d{4}/\\d{2}/\\d{2}/"
+        - "/(markets|business|policy)/\\d{4}/\\d{2}/\\d{2}/"
+        - "/\\d{4}/\\d{2}/\\d{2}/.*(\\?|$)"
+        - "/\\d{4}/\\d{2}/\\d{2}/.*/amp/?$"
+      deny_patterns:
+        - "/video/"
+        - "/podcast/"
+        - "/learn/"
+      js_render: false
+      max_new_urls: 150
+    article:
+      js_render: false
+      title_css: "h1"
+      body_css: "article p, .article-hero + div p, .at-text p"
+      time_css: "time"
+      time_attr: "datetime"
+      author_css: 'a[href*="/author/"], .author a'
+    rate: { per_minute: 40, burst: 12 }
+    compliance: { obey_robots: false, user_agent: "Mozilla/5.0 ..." }
+
+  # --- Federal Reserve (Press + RSS + PDFs optional) ---
+  - name: fed-press
+    base: "https://www.federalreserve.gov"
+    discovery:
+      urls:
+        - "https://www.federalreserve.gov/newsevents/pressreleases.htm"
+        - "https://www.federalreserve.gov/feeds/press_all.xml"
+        - "https://www.federalreserve.gov/newsevents/pressreleases/monetary.htm"
+        - "https://www.federalreserve.gov/newsevents/pressreleases/policy.htm"
+        - "https://www.federalreserve.gov/newsevents/pressreleases/financial.htm"
+        - "https://www.federalreserve.gov/newsevents/pressreleases/bcreg.htm"
+        - "https://www.federalreserve.gov/newsevents/pressreleases/enforcement.htm"
+      follow_links_css:
+        - 'a[href]'
+      allow_patterns:
+        - "/newsevents/pressreleases/(monetary|policy|financial|bcreg|enforcement)\\d{8}[a-z]?\\.htm$"
+        - "/newsevents/pressreleases/(monetary|policy|financial|bcreg|enforcement)\\.htm$"
+        - "/newsevents/pressreleases/files/.*\\.pdf$"
+        - "^https?://www\\.federalreserve\\.gov/newsevents/pressreleases/.*"
+      deny_patterns: []
+      js_render: false
+      max_new_urls: 120
+    article:
+      js_render: false
+      title_css: "h1, .title"
+      body_css: "div#article p, article p, #article p"
+      time_css: "time, .date"
+      time_attr: "datetime"
+      author_css: ""
+    rate: { per_minute: 20, burst: 6 }
+    compliance: { obey_robots: false, user_agent: "Mozilla/5.0 ..." }
+
+  # --- European Central Bank (Press hubs) ---
+  - name: ecb-newsroom
+    base: "https://www.ecb.europa.eu"
+    discovery:
+      urls:
+        - "https://www.ecb.europa.eu/press/html/index.en.html"
+        - "https://www.ecb.europa.eu/press/govcdec/html/index.en.html"
+        - "https://www.ecb.europa.eu/press/pr/html/index.en.html"
+        - "https://www.ecb.europa.eu/press/blog/html/index.en.html"
+      follow_links_css:
+        - 'a[href]'
+      allow_patterns:
+        - "^/press/.*"
+        - "^https?://www\\.ecb\\.europa\\.eu/press/.*"
+      deny_patterns: []
+      js_render: false
+      max_new_urls: 100
+    article:
+      js_render: false
+      title_css: "h1"
+      body_css: "main p, article p, #content p"
+      time_css: "time, .ecb-article-publishdate"
+      time_attr: "datetime"
+      author_css: ""
+    rate: { per_minute: 25, burst: 8 }
+    compliance: { obey_robots: false, user_agent: "Mozilla/5.0 ..." }
+
+  # --- MAS (Singapore) ---
+  - name: mas-news
+    base: "https://www.mas.gov.sg"
+    discovery:
+      urls:
+        - "https://www.mas.gov.sg/news"
+        - "https://www.mas.gov.sg/news/press-releases"
+        - "https://www.mas.gov.sg/news/speeches"
+        - "https://www.mas.gov.sg/news/parliamentary-replies"
+      follow_links_css:
+        - 'a[href]'
+      allow_patterns:
+        - "^/news/.*"
+        - "^https?://www\\.mas\\.gov\\.sg/news/.*"
+      deny_patterns: []
+      js_render: false
+      max_new_urls: 100
+    article:
+      js_render: false
+      title_css: "h1"
+      body_css: "article p, .content.page-content p"
+      time_css: "time, .date"
+      time_attr: "datetime"
+      author_css: ""
+    rate: { per_minute: 25, burst: 8 }
+    compliance: { obey_robots: false, user_agent: "Mozilla/5.0 ..." }
+
+  # --- Investing.com (broad market flow) ---
+  - name: investing-news
+    base: "https://www.investing.com"
+    discovery:
+      urls:
+        - "https://www.investing.com/news/stock-market-news"
+        - "https://www.investing.com/news/economy"
+        - "https://www.investing.com/news/cryptocurrency-news"
+      follow_links_css:
+        - 'a[href*="/news/"]'
+      allow_patterns:
+        - "^/news/.*"
+        - "^https?://www\\.investing\\.com/news/.*"
+      deny_patterns:
+        - "/video/"
+      js_render: false
+      max_new_urls: 120
+    article:
+      js_render: false
+      title_css: "h1"
+      body_css: "article p, .WYSIWYG.articlePage p"
+      time_css: "time, meta[property='article:published_time']"
+      time_attr: "datetime,content"
+      author_css: "a[href*='/authors/']"
+    rate: { per_minute: 35, burst: 12 }
+    compliance: { obey_robots: false, user_agent: "Mozilla/5.0 ..." }
