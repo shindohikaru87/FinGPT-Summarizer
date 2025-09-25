@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
   <meta charset="utf-8"/>
-  <title>FinGPT Clusters</title>
+  <title>FinGPT • Clusters</title>
   <meta name="viewport" content="width=device-width, initial-scale=1"/>
   <link rel="stylesheet" href="./css/styles.css"/>
 </head>
@@ -11,54 +11,94 @@
     <div class="brand">FinGPT • Clusters</div>
     <nav>
       <a href="./search.html">Search</a>
-      <a class="active" href="./clusters.html">Clusters</a>
+      <a href="./clusters.html">Clusters</a>
+      <a href="https://github.com/" target="_blank" class="muted">Git</a>
     </nav>
   </header>
 
   <main class="container">
-    <section class="card row gap">
-      <label class="lbl">Top sample titles
-        <select id="topTitles" class="select">
-          <option>1</option><option selected>3</option><option>5</option><option>10</option>
-        </select>
-      </label>
-      <button id="btnLoad" class="btn">Load</button>
+    <section class="card">
+      <div class="row gap">
+        <label class="lbl">Top titles per cluster
+          <select id="topTitles" class="select">
+            <option>1</option><option selected>3</option><option>5</option><option>10</option>
+          </select>
+        </label>
+        <button id="btnRefresh" class="btn">Refresh</button>
+        <span id="runId" class="muted"></span>
+      </div>
     </section>
 
-    <section id="clusters" class="list mt8"></section>
+    <section id="list" class="list mt8"></section>
   </main>
 
+  <script src="./config.js"></script>
   <script src="./js/api.js"></script>
   <script>
-    const apiPort = (location.search.match(/api=(\d+)/)||[])[1] || "8000";
-    const API = makeApi(`http://localhost:${apiPort}`);
+    // ---- API base ----
+    const API_BASE = (typeof window !== "undefined" && window.FINGPT_API) ? window.FINGPT_API : "http://localhost:8000";
+    const API = makeApi(API_BASE);
+    document.title = `FinGPT • Clusters — ${API_BASE}`;
 
-    const topEl = document.getElementById('topTitles');
-    const outEl = document.getElementById('clusters');
-    document.getElementById('btnLoad').onclick = loadClusters;
+    const listEl = document.getElementById('list');
+    const runIdEl = document.getElementById('runId');
+    const topTitlesEl = document.getElementById('topTitles');
 
-    async function loadClusters(){
-      const data = await API.clusters({ top_titles: Number(topEl.value) });
-      outEl.innerHTML = "";
-      data.clusters.forEach(c => {
-        const d = document.createElement('div');
-        d.className = 'item';
-        const titles = c.sample_titles.map(t=>`<li>${escapeHtml(t)}</li>`).join("");
-        d.innerHTML = `
-          <div class="row space">
-            <div class="title">${escapeHtml(c.label || "(unlabeled)")}</div>
-            <div class="badge">#${c.cluster_id}</div>
-          </div>
-          <div class="muted small">run_id ${c.run_id} • ${c.size} articles</div>
-          <ul class="bullets">${titles}</ul>
-        `;
-        outEl.appendChild(d);
-      });
+    // health check
+    (async () => {
+      try {
+        const r = await fetch(API_BASE + "/healthz");
+        await r.json();
+      } catch (e) {
+        listEl.innerHTML = `<div class="muted">API not reachable at ${API_BASE}.</div>`;
+      }
+    })();
+
+    async function loadClusters() {
+      listEl.innerHTML = '<div class="muted">Loading…</div>';
+      try {
+        const n = Number(topTitlesEl.value);
+        const data = await API.clusters({ top_titles: n });
+        console.log("[clusters] response:", data);
+
+        runIdEl.textContent = `run_id: ${data.run_id}`;
+        renderList(data.clusters || []);
+      } catch (e) {
+        console.error(e);
+        listEl.innerHTML = `<div class="muted" style="color:#c00">Failed to load clusters: ${escapeHtml(String(e))}</div>`;
+      }
     }
 
-    function escapeHtml(s){return s.replace(/[&<>"']/g,m=>({ "&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;" }[m]));}
+    function renderList(items) {
+      if (!items.length) {
+        listEl.innerHTML = `<div class="muted">No clusters found. Run clustering first.</div>`;
+        return;
+      }
+      listEl.innerHTML = "";
+      for (const c of items) {
+        const div = document.createElement('div');
+        div.className = "item";
+        const samples = (c.sample_titles || []).map(t => `<li>${escapeHtml(t)}</li>`).join("");
+        div.innerHTML = `
+          <div class="row space">
+            <div class="title">${escapeHtml(c.label || "(unlabeled)")}</div>
+            <div class="score">size ${Number(c.size || 0)}</div>
+          </div>
+          <div class="muted small">cluster_id ${c.cluster_id} • run_id ${c.run_id}</div>
+          ${samples ? `<ul class="mt6">${samples}</ul>` : ""}
+        `;
+        listEl.appendChild(div);
+      }
+    }
 
-    // auto-load
+    document.getElementById('btnRefresh').onclick = loadClusters;
+
+    function escapeHtml(s) {
+      s = String(s || "");
+      return s.replace(/[&<>"']/g, m => ({ "&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;" }[m]));
+    }
+
+    // initial load
     loadClusters();
   </script>
 </body>

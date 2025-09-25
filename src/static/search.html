@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
   <meta charset="utf-8"/>
-  <title>FinGPT Search</title>
+  <title>FinGPT • Search</title>
   <meta name="viewport" content="width=device-width, initial-scale=1"/>
   <link rel="stylesheet" href="./css/styles.css"/>
 </head>
@@ -50,7 +50,6 @@
     </section>
 
     <section id="resultsMeta" class="muted mt8"></section>
-
     <section id="results" class="list mt8"></section>
 
     <section class="row gap center mt12">
@@ -60,15 +59,18 @@
     </section>
   </main>
 
+  <script src="./config.js"></script>
   <script src="./js/api.js"></script>
   <script>
-    // ---- simple state ----
+    // ---- API base: prefer config.js, otherwise fallback to localhost:8000
+    const API_BASE = (typeof window !== "undefined" && window.FINGPT_API) ? window.FINGPT_API : "http://localhost:8000";
+    const API = makeApi(API_BASE);
+    document.title = `FinGPT • Search — ${API_BASE}`;
+
+    // ---- state ----
     let page = 1;
 
-    // read ?api=port override (defaults to 8000)
-    const apiPort = (location.search.match(/api=(\d+)/)||[])[1] || "8000";
-    const API = makeApi(`http://localhost:${apiPort}`);
-
+    // elements
     const qEl = document.getElementById('q');
     const pageSizeEl = document.getElementById('pageSize');
     const windowHoursEl = document.getElementById('windowHours');
@@ -81,76 +83,119 @@
     const btnPrev = document.getElementById('prev');
     const btnNext = document.getElementById('next');
 
-    async function runSearch(goTo=1) {
-      page = goTo;
-      const q = qEl.value.trim();
-      if(!q) { resultsEl.innerHTML = ""; metaEl.textContent = "Type some keywords."; return; }
+    // health check for quick feedback
+    (async () => {
+      try {
+        const r = await fetch(API_BASE + "/healthz");
+        const js = await r.json();
+        console.log("API health:", js);
+      } catch (e) {
+        console.error("API not reachable at", API_BASE, e);
+        metaEl.innerHTML = `<span style="color:#c00">API not reachable at ${API_BASE} — start the server or check the port.</span>`;
+      }
+    })();
 
-      // Mode toggles weights via query (your API always computes hybrid internally).
-      // We simulate by post-filtering scores if needed.
+    async function runSearch(goTo = 1) {
+      page = goTo;
+      const q = (qEl.value || "").trim();
+      if (!q) {
+        resultsEl.innerHTML = "";
+        metaEl.textContent = "Type some keywords.";
+        pageInfoEl.textContent = "";
+        btnPrev.disabled = true;
+        btnNext.disabled = true;
+        return;
+      }
+
       const ps = Number(pageSizeEl.value);
       const wh = Number(windowHoursEl.value);
       const useLatestRun = useLatestRunEl.checked;
 
-      const data = await API.search({
-        q,
-        page,
-        page_size: ps,
-        window_hours: wh,
-        use_latest_run: useLatestRun
-      });
+      resultsEl.innerHTML = '<div class="muted">Loading…</div>';
+      metaEl.textContent = '';
+      pageInfoEl.textContent = `Page ${page}`;
+      btnPrev.disabled = true; btnNext.disabled = true;
 
-      // (Optional) client-side mode tweak: zero-out the opposing term to visualize
-      if (modeEl.value !== "hybrid") {
-        // Keyword-only: re-score by title+summary occurrences (quick heuristic)
-        if (modeEl.value === "keyword") {
-          const terms = q.toLowerCase().split(/\s+/).filter(Boolean);
-          for (const h of data.hits) {
-            const t = (h.title||"").toLowerCase();
-            const s = (h.summary_text||"").toLowerCase();
-            let sc=0; for (const term of terms){ sc += (t.match(new RegExp(term,"g"))||[]).length*2 + (s.match(new RegExp(term,"g"))||[]).length; }
-            h.score = sc;
+      try {
+        const data = await API.search({
+          q,
+          page,
+          page_size: ps,
+          window_hours: wh,
+          use_latest_run: useLatestRun
+        });
+        console.log("[search] response:", data);
+
+        // Optional client-side view modes (visual only)
+        if (modeEl.value !== "hybrid" && Array.isArray(data.hits)) {
+          if (modeEl.value === "keyword") {
+            const terms = q.toLowerCase().split(/\s+/).filter(Boolean);
+            for (const h of data.hits) {
+              const t = (h.title || "").toLowerCase();
+              const s = (h.summary_text || "").toLowerCase();
+              let sc = 0;
+              for (const term of terms) {
+                const re = new RegExp(term.replace(/[.*+?^${}()|[\]\\]/g,'\\$&'), "g");
+                sc += (t.match(re) || []).length * 2 + (s.match(re) || []).length;
+              }
+              h.score = sc;
+            }
+            data.hits.sort((a,b)=>b.score-a.score);
           }
-          data.hits.sort((a,b)=>b.score-a.score);
         }
-        // Embedding-only: keep as-is (server already includes embedding in score)
-      }
 
-      renderResults(data);
+        renderResults(data, ps);
+      } catch (err) {
+        console.error("Fetch/search failed:", err);
+        resultsEl.innerHTML = "";
+        metaEl.innerHTML = `<span style="color:#c00">Error: ${escapeHtml(String(err))}</span>`;
+        pageInfoEl.textContent = `Page ${page}`;
+        btnPrev.disabled = page <= 1;
+        btnNext.disabled = true;
+      }
     }
 
-    function renderResults(js) {
-      metaEl.textContent = `${js.returned} / ${js.total_candidates} results`;
-      pageInfoEl.textContent = `Page ${js.page}`;
+    function renderResults(js, pageSize) {
+      const total = Number(js?.total_candidates ?? 0);
+      const returned = Number(js?.returned ?? 0);
+      metaEl.textContent = `${returned} / ${total} results`;
+      pageInfoEl.textContent = `Page ${Number(js?.page ?? page)}`;
 
       resultsEl.innerHTML = "";
-      js.hits.forEach(h => {
-        const div = document.createElement('div');
-        div.className = 'item';
-        div.innerHTML = `
-          <div class="row space">
-            <div class="title"><a href="${h.url}" target="_blank">${escapeHtml(h.title || "(untitled)")}</a></div>
-            <div class="score">score ${Number(h.score).toFixed(3)}</div>
-          </div>
-          <div class="muted small">${escapeHtml(h.source || "")} • ${h.published_at || "N/A"} ${h.cluster_label ? " • " + escapeHtml(h.cluster_label) : ""}</div>
-          ${h.summary_text ? `<pre class="summary">${escapeHtml(h.summary_text)}</pre>` : ""}
-        `;
-        resultsEl.appendChild(div);
-      });
+      const hits = Array.isArray(js?.hits) ? js.hits : [];
+
+      if (hits.length === 0) {
+        resultsEl.innerHTML = `<div class="muted">No results found.</div>`;
+      } else {
+        for (const h of hits) {
+          const div = document.createElement('div');
+          div.className = 'item';
+          div.innerHTML = `
+            <div class="row space">
+              <div class="title"><a href="${h.url}" target="_blank" rel="noopener noreferrer">${escapeHtml(h.title || "(untitled)")}</a></div>
+              <div class="score">score ${Number(h.score).toFixed(3)}</div>
+            </div>
+            <div class="muted small">${escapeHtml(h.source || "")} • ${h.published_at || "N/A"}${h.cluster_label ? " • " + escapeHtml(h.cluster_label) : ""}</div>
+            ${h.summary_text ? `<pre class="summary">${escapeHtml(h.summary_text)}</pre>` : ""}
+          `;
+          resultsEl.appendChild(div);
+        }
+      }
 
       btnPrev.disabled = (page <= 1);
-      btnNext.disabled = (js.returned === 0 || (page * Number(pageSizeEl.value) >= js.total_candidates));
+      btnNext.disabled = (returned === 0 || (page * pageSize >= total));
     }
 
     document.getElementById('btnSearch').onclick = () => runSearch(1);
     qEl.addEventListener('keydown', e => { if (e.key === 'Enter') runSearch(1); });
-    btnPrev.onclick = () => runSearch(page-1);
-    btnNext.onclick = () => runSearch(page+1);
+    btnPrev.onclick = () => runSearch(page - 1);
+    btnNext.onclick = () => runSearch(page + 1);
 
-    // small helpers
-    function escapeHtml(s){return s.replace(/[&<>"']/g,m=>({ "&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;" }[m]));}
+    function escapeHtml(s) {
+      s = String(s || "");
+      return s.replace(/[&<>"']/g, m => ({ "&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;" }[m]));
+    }
 
-    // autofocus for convenience
     qEl.focus();
   </script>
 </body>
