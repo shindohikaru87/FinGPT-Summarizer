@@ -21,7 +21,6 @@ __pycache__/
 *.ini
 *.cfg
 *.toml
-*.yaml
 *.yml
 *.json
 

@@ -1,0 +1,36 @@
+model:
+  provider: OPENAI
+  name: gpt-4o-mini
+  temperature: 0.2
+  max_tokens: 700
+
+io:
+  min_published_at: null   # e.g. "2025-09-01T00:00:00Z"
+  limit: 100               # batch size
+
+prompt:
+  template_file: ./src/summarization/prompts/summarize_news.j2
+  system: |
+    You are a senior markets editor writing for portfolio managers and buy-side analysts.
+    Requirements:
+    - Be precise, neutral, and audit-friendly.
+    - Use concrete numbers, dates (YYYY-MM-DD), and tickers.
+    - Avoid hype; prefer short, fact-first bullets.
+    - Note market impact (directional + magnitude) when evident.
+
+runtime:
+  concurrency: 6
+  retries: 2
+
+embeddings:
+  provider: openai
+  model: text-embedding-3-small   # good quality/cost; 1536-dim
+  batch_size: 512                 # API supports large batches; tune if you hit 413/429
+  normalize: true                 # L2-normalize for cosine search
+
+clustering:
+  window_hours: 24
+  algo: kmeans
+  min_k: 5
+  max_k: 25
+  min_cluster_size: 5
