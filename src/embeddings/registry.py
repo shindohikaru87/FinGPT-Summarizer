@@ -3,12 +3,12 @@ from __future__ import annotations
 
 import time
 from dataclasses import dataclass
-from typing import List, Optional
+from typing import List, Optional, Any
 
 @dataclass
 class EmbeddingConfig:
     """
-    Configuration for OpenAI embeddings.
+    Configuration for embeddings.
     """
     provider: str = "openai"                 # fixed to 'openai' in this build
     model: str = "text-embedding-3-small"    # or 'text-embedding-3-large'
@@ -19,6 +19,7 @@ class EmbeddingConfig:
 
 def _l2_normalize(v):
     import numpy as np
+    v = np.asarray(v, dtype="float32")
     n = (v ** 2).sum(axis=1, keepdims=True) ** 0.5
     n[n == 0] = 1.0
     return v / n
@@ -57,10 +58,7 @@ class OpenAIEmbedder:
         out: List[str] = []
         for t in texts:
             toks = enc.encode(t)
-            if len(toks) <= limit:
-                out.append(t)
-            else:
-                out.append(enc.decode(toks[:limit]))
+            out.append(t if len(toks) <= limit else enc.decode(toks[:limit]))
         return out
 
     def embed(self, texts: List[str]):
@@ -102,6 +100,7 @@ class OpenAIEmbedder:
                 # Non-retryable
                 raise
 
+        import numpy as np
         embs = np.vstack(out_chunks) if out_chunks else np.zeros((0, 1536), dtype="float32")
         return _l2_normalize(embs) if self.normalize else embs
 
@@ -110,3 +109,54 @@ def get_embedder(cfg: EmbeddingConfig) -> OpenAIEmbedder:
     if cfg.provider != "openai":
         raise ValueError("This build only supports provider='openai'.")
     return OpenAIEmbedder(cfg)
+
+
+# ---------------------------
+# LangChain adapter helpers
+# ---------------------------
+
+def from_langchain_embedding(lc_embedding: Any) -> EmbeddingConfig:
+    """
+    Convert a LangChain embedding instance into our EmbeddingConfig.
+    Currently supports langchain_openai.OpenAIEmbeddings.
+    """
+    cls = lc_embedding.__class__.__name__.lower()
+
+    # langchain_openai.OpenAIEmbeddings
+    if "openai" in cls and "embedding" in cls:
+        # LC exposes `model`
+        model = getattr(lc_embedding, "model", None) or "text-embedding-3-small"
+        # LC usually doesn't have a standardized batch_size; keep our default (overridable via config)
+        return EmbeddingConfig(
+            provider="openai",
+            model=model,
+            batch_size=512,
+            normalize=True,
+        )
+
+    raise ValueError(f"Unsupported LangChain embedding class: {lc_embedding.__class__.__name__}")
+
+
+def to_langchain_embedding(cfg: EmbeddingConfig) -> Any:
+    """
+    Optional: Instantiate a LangChain embedding object from our EmbeddingConfig.
+    Currently returns langchain_openai.OpenAIEmbeddings for provider='openai'.
+    """
+    if cfg.provider != "openai":
+        raise ValueError("to_langchain_embedding only supports provider='openai' in this build.")
+    try:
+        from langchain_openai import OpenAIEmbeddings
+    except Exception as e:
+        raise ImportError(
+            "langchain-openai is not installed. Install with: `poetry add langchain-openai`."
+        ) from e
+    return OpenAIEmbeddings(model=cfg.model)
+
+
+__all__ = [
+    "EmbeddingConfig",
+    "OpenAIEmbedder",
+    "get_embedder",
+    "from_langchain_embedding",
+    "to_langchain_embedding",
+]

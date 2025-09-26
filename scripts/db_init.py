@@ -207,7 +207,7 @@ def main():
         vacuum_sqlite()
 
     backend = "SQLite" if _is_sqlite_engine(engine) else "Non-SQLite"
-    print(f"✅ Done. Engine backend: {backend}")
+    print(f"Done. Engine backend: {backend}")
     print("Tables present:", ", ".join(sorted(t.name for t in Base.metadata.sorted_tables)))
 
 if __name__ == "__main__":

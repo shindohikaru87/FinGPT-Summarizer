@@ -9,17 +9,22 @@ SUM_LIMIT="${SUM_LIMIT:-400}"
 EMB_LIMIT="${EMB_LIMIT:-1000}"
 MODEL_SUM="${MODEL_SUM:-gpt-4o-mini}"
 
-DO_INGEST=false       # placeholder; wire to your crawler if/when ready
-DO_SUMMARIZE=false
+DO_INGEST=true
+DO_SUMMARIZE=true
 DO_EMBED=true
 NO_UI=false
 NO_OPEN=false
 INSTALL_DEPS=false
 
+# Ingestion controls
+INGEST_SCRIPT="${INGEST_SCRIPT:-scripts/e2e_ingest.py}"
+INGEST_ARGS="${INGEST_ARGS:-}"           # e.g. '--sources reuters-markets,marketwatch-latest'
+INGEST_BG=false
+
 # ---- Helpers ----
 die() { echo "Error: $*" >&2; exit 1; }
 have() { command -v "$1" >/dev/null 2>&1; }
-in_use() { lsof -i ":$1" >/dev/null 2>&1; }
+in_use() { lsof -i ":$1" >/dev/null 2>&1 || false; }
 find_free_port() {
   python3 - <<'PY'
 import socket
@@ -39,7 +44,10 @@ Options:
   --sum-limit N           Default: ${SUM_LIMIT}
   --emb-limit N           Default: ${EMB_LIMIT}
   --model-sum NAME        Default: ${MODEL_SUM}
-  --with-ingest           Run ingestion step (placeholder hook)
+  --with-ingest           Run ingestion step (default: on)
+  --no-ingest             Skip ingestion
+  --ingest-bg             Run ingestion in background (non-blocking)
+  --ingest-args "ARGS"    Extra args for ${INGEST_SCRIPT} (default adds '--limit 120' unless provided)
   --no-summarize          Skip summarization
   --no-embed              Skip embeddings
   --no-ui                 Do not start static UI server
@@ -50,7 +58,8 @@ Options:
   -h, --help              Show this help
 
 Environment overrides:
-  OPENAI_API_KEY, PORT_API, PORT_UI, SINCE_HOURS, SUM_LIMIT, EMB_LIMIT, MODEL_SUM
+  OPENAI_API_KEY, PORT_API, PORT_UI, SINCE_HOURS, SUM_LIMIT, EMB_LIMIT, MODEL_SUM,
+  INGEST_SCRIPT, INGEST_ARGS
 USAGE
 }
 
@@ -62,6 +71,9 @@ while [[ $# -gt 0 ]]; do
     --emb-limit)   EMB_LIMIT="$2"; shift 2 ;;
     --model-sum)   MODEL_SUM="$2"; shift 2 ;;
     --with-ingest) DO_INGEST=true; shift ;;
+    --no-ingest)   DO_INGEST=false; shift ;;
+    --ingest-bg)   INGEST_BG=true; shift ;;
+    --ingest-args) INGEST_ARGS="$2"; shift 2 ;;
     --no-summarize) DO_SUMMARIZE=false; shift ;;
     --no-embed)     DO_EMBED=false; shift ;;
     --no-ui)        NO_UI=true; shift ;;
@@ -84,7 +96,6 @@ if [[ -f "scripts/_bootstrap_env.py" || -f "scripts/_bootstrap_env/__init__.py" 
 fi
 
 # ---- Sanity checks ----
-[[ -n "${OPENAI_API_KEY:-}" ]] || echo "Warning: OPENAI_API_KEY is not set (embedding will fallback to keyword-only)."
 have poetry || die "Poetry is required. Please install: https://python-poetry.org/docs/"
 
 # ---- Install deps (optional) ----
@@ -93,10 +104,39 @@ if $INSTALL_DEPS; then
   poetry install --no-interaction --no-ansi
 fi
 
-# ---- Optional ingestion hook (customize to your pipeline if/when ready) ----
+# ---- Ingestion ----
+PIDS=()
+mkdir -p logs
+INGEST_LOG="logs/ingest_$(date +%Y%m%d_%H%M%S).log"
+
+# Default limit=120 if not provided
+if [[ -z "${INGEST_ARGS:-}" ]] || ! [[ " ${INGEST_ARGS} " =~ [[:space:]]--limit[[:space:]] ]]; then
+  INGEST_ARGS="--limit 120 ${INGEST_ARGS}"
+fi
+
+run_ingest() {
+  if [[ ! -f "$INGEST_SCRIPT" ]]; then
+    die "Ingest script not found: $INGEST_SCRIPT"
+  fi
+  if $INGEST_BG; then
+    echo "==> Ingestion (background): poetry run python ${INGEST_SCRIPT} ${INGEST_ARGS} | tee ${INGEST_LOG}"
+    # shellcheck disable=SC2086
+    ( set -o pipefail; poetry run python "$INGEST_SCRIPT" ${INGEST_ARGS} 2>&1 | tee "$INGEST_LOG" ) &
+    PIDS+=($!)
+    echo "   • PID ${PIDS[-1]} • log: ${INGEST_LOG}"
+  else
+    echo "==> Ingestion (foreground): running ${INGEST_SCRIPT} ${INGEST_ARGS}"
+    # shellcheck disable=SC2086
+    time poetry run python "$INGEST_SCRIPT" ${INGEST_ARGS} 2>&1 | tee "$INGEST_LOG"
+    echo "==> Ingestion completed • log: ${INGEST_LOG}"
+  fi
+}
+
 if $DO_INGEST; then
-  echo "==> Ingestion: customize this block to call your crawler."
-  # poetry run python -m scripts.crawl --max-new 200 --sources reuters-markets,marketwatch-latest
+  echo "==> Ingestion: calling ${INGEST_SCRIPT}"
+  run_ingest
+else
+  echo "==> Skipping ingestion (--no-ingest)"
 fi
 
 # ---- Summarization ----
@@ -148,7 +188,7 @@ async function run(p=1) {
   url.searchParams.set('q', q);
   url.searchParams.set('page', p);
   url.searchParams.set('page_size', 20);
-  const r = await fetch(url);
+  const r = await fetch(url, { cache: 'no-store' });
   const js = await r.json();
   const out = document.getElementById('out');
   out.innerHTML = `<p><b>${js.returned}</b> / ${js.total_candidates} results</p>`;
@@ -171,9 +211,6 @@ HTML
 fi
 
 # ---- Start API & UI ----
-PIDS=()
-
-# Auto-pick a free API port if requested is busy
 if in_use "${PORT_API}"; then
   echo "⚠️  Port ${PORT_API} is in use; selecting a free API port..."
   PORT_API="$(find_free_port)"
@@ -184,12 +221,10 @@ poetry run uvicorn src.api.main:app --host 0.0.0.0 --port "${PORT_API}" --reload
 PIDS+=($!)
 
 if ! $NO_UI; then
-  # Auto-pick a free UI port if requested is busy
   if in_use "${PORT_UI}"; then
     echo "⚠️  Port ${PORT_UI} is in use; selecting a free UI port..."
     PORT_UI="$(find_free_port)"
   fi
-
   echo "==> Serving static UI on :${PORT_UI} ..."
   ( cd "$STATIC_DIR" && python3 -m http.server "${PORT_UI}" ) &
   PIDS+=($!)
@@ -211,29 +246,15 @@ else
   echo "==> API available at: http://localhost:${PORT_API}/docs"
 fi
 
-# ---- UI + API availability ----
+# Also write a small config for the static UI
 if ! $NO_UI; then
-  # write config.js so the UI knows which API port to use
   cat > "${STATIC_DIR}/config.js" <<EOF
 // generated by run.sh
 window.FINGPT_API = "http://localhost:${PORT_API}";
 EOF
-
-  URL="http://localhost:${PORT_UI}/search.html"
-  echo "==> UI available at: $URL"
 fi
 
 echo "==> API available at: http://localhost:${PORT_API}/docs"
-
-# ---- Auto-open browser ----
-if ! $NO_UI && ! $NO_OPEN; then
-  if [[ "$OSTYPE" == "darwin"* ]]; then
-    open "$URL"
-  elif have xdg-open; then
-    xdg-open "$URL" >/dev/null 2>&1 || true
-  fi
-fi
-
 
 # ---- Cleanup on exit ----
 cleanup() {
