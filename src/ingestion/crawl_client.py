@@ -15,8 +15,6 @@ class Crawl4AIClient:
     """Wrapper around AsyncWebCrawler to expose a sync .get()"""
 
     def __init__(self):
-        # For MVP we create a new crawler per call via asyncio.run.
-        # Later, you can optimize by keeping a long-lived crawler instance.
         pass
 
     def get(self, url: str, cfg: CrawlConfig) -> str:
