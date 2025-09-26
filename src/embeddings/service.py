@@ -125,30 +125,3 @@ def run_embeddings(ecfg: EmbeddingConfig, params: RunParams) -> int:
                 continue
 
         return total
-
-def from_langchain_embedding(lc_embedding: Any) -> EmbeddingConfig:
-    """
-    Convert a LangChain embedding instance into our EmbeddingConfig.
-    Currently supports OpenAIEmbeddings and HuggingFaceEmbeddings.
-    """
-    cls_name = lc_embedding.__class__.__name__.lower()
-
-    if "openai" in cls_name:
-        model = getattr(lc_embedding, "model", "text-embedding-3-small")
-        return EmbeddingConfig(
-            provider="openai",
-            model=model,
-            batch_size=getattr(lc_embedding, "batch_size", 512),
-            normalize=True
-        )
-
-    if "huggingface" in cls_name:
-        model = getattr(lc_embedding, "model_name", "sentence-transformers/all-MiniLM-L6-v2")
-        return EmbeddingConfig(
-            provider="huggingface",
-            model=model,
-            batch_size=getattr(lc_embedding, "batch_size", 32),
-            normalize=True
-        )
-
-    raise ValueError(f"Unsupported LangChain embedding class: {lc_embedding.__class__.__name__}")

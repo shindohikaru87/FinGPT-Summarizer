@@ -244,6 +244,9 @@ def search(
     page_size: int = Query(20, ge=1, le=200),
     window_hours: int = Query(DEFAULT_WINDOW_HOURS, ge=1, le=365 * 24),
     use_latest_run: bool = Query(True, description="Attach cluster label from latest run"),
+    # --- new controls ---
+    min_score: float = Query(1e-6, ge=0.0, description="Filter out hits with score < min_score"),
+    debug_include_zero: bool = Query(False, description="If true, do not filter low/zero score hits"),
 ):
     """
     Hybrid search:
@@ -271,7 +274,6 @@ def search(
         scored: List[Dict[str, Any]] = []
         for c in cands:
             vec = c["vector"]
-            # If stored as TEXT JSON, decode to list[float]
             if isinstance(vec, str):
                 try:
                     vec = json.loads(vec)
@@ -283,18 +285,29 @@ def search(
             emb_score = _cosine(q_vec, vec) if (q_vec and vec) else 0.0
             kw_score = _keyword_score(c["title"], c.get("summary_text") or c.get("body_text"), q_terms)
             score = EMB_WEIGHT * emb_score + KW_WEIGHT * kw_score
+
             c2 = dict(c)
             c2["score"] = float(score)
             scored.append(c2)
 
+        # order by score desc
         scored.sort(key=lambda x: x["score"], reverse=True)
-        total = len(scored)
 
-        # pagination within top-K window
+        total_candidates = len(scored)
+
+        # --- filtering: drop 0/near-0 unless debug says otherwise ---
+        if not debug_include_zero:
+            filtered = [s for s in scored if s["score"] >= min_score]
+        else:
+            filtered = scored
+
+        total_after_filter = len(filtered)
+
+        # pagination *after* filtering, still honoring top-K ceiling
         start = (page - 1) * page_size
         end = start + page_size
         top_needed = max(k, end)
-        window = scored[:top_needed]
+        window = filtered[:top_needed]
         subset = window[start:end]
 
         hits = [
@@ -305,7 +318,6 @@ def search(
                 url=s["url"],
                 published_at=_iso(s["published_at"]),
                 summary_text=s["summary_text"],
-                # <-- already coerced to Optional[str] when fetched -->
                 cluster_label=s.get("cluster_label"),
                 score=round(s["score"], 6),
             )
@@ -314,8 +326,8 @@ def search(
 
         return SearchResponse(
             query=q,
-            total_candidates=total,
-            returned=len(hits),
+            total_candidates=total_candidates,   # before filtering
+            returned=len(hits),                  # after pagination
             page=page,
             page_size=page_size,
             hits=hits,

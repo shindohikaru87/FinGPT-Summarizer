@@ -9,7 +9,7 @@ SUM_LIMIT="${SUM_LIMIT:-400}"
 EMB_LIMIT="${EMB_LIMIT:-1000}"
 MODEL_SUM="${MODEL_SUM:-gpt-4o-mini}"
 
-DO_INGEST=true
+DO_INGEST=false
 DO_SUMMARIZE=true
 DO_EMBED=true
 NO_UI=false
@@ -20,6 +20,7 @@ INSTALL_DEPS=false
 INGEST_SCRIPT="${INGEST_SCRIPT:-scripts/e2e_ingest.py}"
 INGEST_ARGS="${INGEST_ARGS:-}"           # e.g. '--sources reuters-markets,marketwatch-latest'
 INGEST_BG=false
+INGEST_LIMIT="${INGEST_LIMIT:-120}"      # default limit for e2e_ingest.py
 
 # ---- Helpers ----
 die() { echo "Error: $*" >&2; exit 1; }
@@ -47,7 +48,8 @@ Options:
   --with-ingest           Run ingestion step (default: on)
   --no-ingest             Skip ingestion
   --ingest-bg             Run ingestion in background (non-blocking)
-  --ingest-args "ARGS"    Extra args for ${INGEST_SCRIPT} (default adds '--limit 120' unless provided)
+  --ingest-args "ARGS"    Extra args for ${INGEST_SCRIPT} (if no --limit given, uses --ingest-limit)
+  --ingest-limit N        Default: ${INGEST_LIMIT} (prepended as '--limit N' unless --limit already in --ingest-args)
   --no-summarize          Skip summarization
   --no-embed              Skip embeddings
   --no-ui                 Do not start static UI server
@@ -59,7 +61,7 @@ Options:
 
 Environment overrides:
   OPENAI_API_KEY, PORT_API, PORT_UI, SINCE_HOURS, SUM_LIMIT, EMB_LIMIT, MODEL_SUM,
-  INGEST_SCRIPT, INGEST_ARGS
+  INGEST_SCRIPT, INGEST_ARGS, INGEST_LIMIT
 USAGE
 }
 
@@ -74,6 +76,7 @@ while [[ $# -gt 0 ]]; do
     --no-ingest)   DO_INGEST=false; shift ;;
     --ingest-bg)   INGEST_BG=true; shift ;;
     --ingest-args) INGEST_ARGS="$2"; shift 2 ;;
+    --ingest-limit) INGEST_LIMIT="$2"; shift 2 ;;
     --no-summarize) DO_SUMMARIZE=false; shift ;;
     --no-embed)     DO_EMBED=false; shift ;;
     --no-ui)        NO_UI=true; shift ;;
@@ -109,9 +112,9 @@ PIDS=()
 mkdir -p logs
 INGEST_LOG="logs/ingest_$(date +%Y%m%d_%H%M%S).log"
 
-# Default limit=120 if not provided
+# If --limit is not present in INGEST_ARGS, prepend --limit ${INGEST_LIMIT}
 if [[ -z "${INGEST_ARGS:-}" ]] || ! [[ " ${INGEST_ARGS} " =~ [[:space:]]--limit[[:space:]] ]]; then
-  INGEST_ARGS="--limit 120 ${INGEST_ARGS}"
+  INGEST_ARGS="--limit ${INGEST_LIMIT} ${INGEST_ARGS}"
 fi
 
 run_ingest() {
@@ -196,9 +199,9 @@ async function run(p=1) {
     const d = document.createElement('div');
     d.className = 'hit';
     d.innerHTML = `
-      <div><a href="${h.url}" target="_blank"><b>${h.title || '(untitled)'}</b></a></div>
-      <div class="meta">${h.source ?? ''} • ${h.published_at ?? 'N/A'} • score ${Number(h.score).toFixed(3)} ${h.cluster_label ? '• ' + h.cluster_label : ''}</div>
-      ${h.summary_text ? `<div style="margin-top:6px; white-space:pre-wrap;">${h.summary_text}</div>` : ''}
+      <div><a href="\${h.url}" target="_blank"><b>\${h.title || '(untitled)'}</b></a></div>
+      <div class="meta">\${h.source ?? ''} • \${h.published_at ?? 'N/A'} • score \${Number(h.score).toFixed(3)} \${h.cluster_label ? '• ' + h.cluster_label : ''}</div>
+      \${h.summary_text ? `<div style="margin-top:6px; white-space:pre-wrap;">\${h.summary_text}</div>` : ''}
     `;
     out.appendChild(d);
   });
