@@ -13,6 +13,7 @@ Usage:
   python scripts/db_init.py --truncate-summaries  # delete from summaries (keep articles)
   python scripts/db_init.py --reindex             # rebuild indexes (SQLite)
   python scripts/db_init.py --show-tables         # list current DB tables
+  python scripts/db_init.py --show-indexes        # list current DB indexes (SQLite)
 """
 from __future__ import annotations
 
@@ -28,6 +29,7 @@ from sqlalchemy.engine import Engine
 
 from src.app.db import engine, DATABASE_URL
 import src.app.models as m  # import all models to register tables
+
 Base = m.Base
 Article = m.Article
 Summary = m.Summary
@@ -105,6 +107,48 @@ def show_tables():
         for t in sorted(tables):
             print(f"  - {t}")
 
+def show_indexes():
+    if not _is_sqlite_engine(engine):
+        print("Index listing is currently implemented for SQLite only.")
+        return
+    insp = inspect(engine)
+    tables = insp.get_table_names()
+    if not tables:
+        print("No tables.")
+        return
+    print("Current indexes (SQLite):")
+    for t in sorted(tables):
+        idxs = insp.get_indexes(t)
+        if not idxs:
+            print(f"  - {t}: (none)")
+            continue
+        print(f"  - {t}:")
+        for ix in idxs:
+            unique = " UNIQUE" if ix.get("unique") else ""
+            cols = ", ".join(ix.get("column_names") or [])
+            print(f"      • {ix['name']}{unique} ON ({cols})")
+
+def _declared_index_names_from_metadata():
+    names = set()
+    for table in Base.metadata.tables.values():
+        for idx in table.indexes:
+            if idx.name:
+                names.add(idx.name)
+    return names
+
+def drop_existing_sqlite_indexes_from_metadata():
+    """Pre-drop any indexes that our metadata declares (SQLite only, safe)."""
+    if not _is_sqlite_engine(engine):
+        return
+    names = _declared_index_names_from_metadata()
+    if not names:
+        return
+    print(f"SQLite: pre-dropping {len(names)} declared index(es) if they exist …")
+    with engine.begin() as conn:
+        for name in sorted(names):
+            conn.execute(text(f'DROP INDEX IF EXISTS "{name}";'))
+    print("SQLite: index pre-drop complete.")
+
 def main():
     ap = argparse.ArgumentParser(description="Initialize DB schema.")
     ap.add_argument("--drop", action="store_true", help="Drop all tables first.")
@@ -116,12 +160,17 @@ def main():
     ap.add_argument("--truncate-summaries", action="store_true", help="Delete all rows from summaries table.")
     ap.add_argument("--reindex", action="store_true", help="SQLite: REINDEX after (re)create.")
     ap.add_argument("--show-tables", action="store_true", help="List current DB tables and exit.")
+    ap.add_argument("--show-indexes", action="store_true", help="List current DB indexes (SQLite) and exit.")
     args = ap.parse_args()
 
     print(f"DB URL: {DATABASE_URL}")
 
     if args.show_tables:
         show_tables()
+        sys.exit(0)
+
+    if args.show_indexes:
+        show_indexes()
         sys.exit(0)
 
     # Optional PRAGMAs early
@@ -143,6 +192,10 @@ def main():
             Base.metadata.drop_all(engine)
         else:
             print("Aborted drop.")
+    else:
+        # If not doing a full drop, proactively remove any pre-existing
+        # index names declared in metadata so create_all won't choke.
+        drop_existing_sqlite_indexes_from_metadata()
 
     print("Creating tables (if not exist)…")
     Base.metadata.create_all(engine)
