@@ -193,8 +193,6 @@ def main():
         else:
             print("Aborted drop.")
     else:
-        # If not doing a full drop, proactively remove any pre-existing
-        # index names declared in metadata so create_all won't choke.
         drop_existing_sqlite_indexes_from_metadata()
 
     print("Creating tables (if not exist)…")
