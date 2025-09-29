@@ -1,18 +1,40 @@
 #!/usr/bin/env python3
 """
-Tail the most recent Article rows with summary/embedding/cluster info.
+Tail the most recent Article rows with summary, embedding, and cluster info.
 
-Usage:
+Examples:
+
+  # === Basic article tailing ===
   python scripts/db_tail.py
   python scripts/db_tail.py --n 20
   python scripts/db_tail.py --source cnbc-markets --n 10
   python scripts/db_tail.py --status READY_FOR_SUMMARY --since-hours 6
-  python scripts/db_tail.py --latest-run
-  python scripts/db_tail.py --run-id 1695000000
   python scripts/db_tail.py --show-body --body-chars 400 --show-summary --summary-chars 400
   python scripts/db_tail.py --json
 
-Env:
+  # === Clusters ===
+  # Show cluster label for most recent run
+  python scripts/db_tail.py --latest-run
+
+  # Show cluster label for a specific run_id
+  python scripts/db_tail.py --run-id 1695000000
+
+  # Group articles by cluster (most recent run)
+  python scripts/db_tail.py --latest-run --group-by-cluster
+
+  # Group clusters, showing only 3 articles per cluster
+  python scripts/db_tail.py --latest-run --group-by-cluster --per-cluster 3
+
+  # Group clusters, only include clusters with ≥5 members
+  python scripts/db_tail.py --latest-run --group-by-cluster --min-cluster-size 5
+
+  # Group clusters, filter to labels containing 'oil'
+  python scripts/db_tail.py --latest-run --group-by-cluster --cluster-label oil
+
+  # Group clusters for a specific run_id with summary previews
+  python scripts/db_tail.py --run-id 1695000000 --group-by-cluster --show-summary --summary-chars 200
+
+Environment variables:
   DATABASE_URL, SQL_ECHO
 """
 from __future__ import annotations
@@ -22,12 +44,13 @@ import json
 from datetime import datetime, timedelta, timezone
 import sys
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple, DefaultDict
+from collections import defaultdict
 
 # Ensure repo root on path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from sqlalchemy import select, func, and_  # noqa: E402
+from sqlalchemy import select, func, and_, desc  # noqa: E402
 from sqlalchemy.orm import aliased  # noqa: E402
 
 from src.app.db import session_scope  # noqa: E402
@@ -45,9 +68,21 @@ def iso(dt):
 
 
 def _latest_cluster_run_id(sess) -> Optional[int]:
-    """Return the most recent Cluster.run_id, or None if no clusters exist."""
     row = sess.execute(select(func.max(Cluster.run_id))).first()
     return row[0] if row and row[0] is not None else None
+
+
+def _latest_summary_alias():
+    sq_latest_summary = (
+        select(
+            Summary.article_id.label("article_id"),
+            func.max(Summary.created_at).label("max_created"),
+        )
+        .group_by(Summary.article_id)
+        .subquery()
+    )
+    S = aliased(Summary)
+    return sq_latest_summary, S
 
 
 def _fetch_rows(
@@ -61,20 +96,8 @@ def _fetch_rows(
     """
     Returns a list of dicts with article + latest summary + embedding + cluster info.
     """
-    # Subquery: latest summary per article
-    sq_latest_summary = (
-        select(
-            Summary.article_id.label("article_id"),
-            func.max(Summary.created_at).label("max_created"),
-        )
-        .group_by(Summary.article_id)
-        .subquery()
-    )
-    S = aliased(Summary)
-    # Subquery join gives us the latest Summary row per article (if any)
-    # We'll left join it in the main query.
+    sq_latest_summary, S = _latest_summary_alias()
 
-    # Base query on Article
     q = (
         select(
             Article.id,
@@ -88,23 +111,16 @@ def _fetch_rows(
             Article.status,
             Article.lang,
             Article.body_text,
-            # Latest summary fields (if any)
             S.model.label("summary_model"),
             S.provider.label("summary_provider"),
             S.created_at.label("summary_created_at"),
             S.summary_text.label("summary_text"),
-            # Embedding fields (if any)
             Embedding.model.label("embed_model"),
             Embedding.provider.label("embed_provider"),
             Embedding.created_at.label("embed_created_at"),
             Embedding.vector.label("embed_vector"),
         )
-        # Latest summary LEFT JOIN
-        .join(
-            sq_latest_summary,
-            sq_latest_summary.c.article_id == Article.id,
-            isouter=True,
-        )
+        .join(sq_latest_summary, sq_latest_summary.c.article_id == Article.id, isouter=True)
         .join(
             S,
             and_(
@@ -113,23 +129,14 @@ def _fetch_rows(
             ),
             isouter=True,
         )
-        # Embedding LEFT JOIN (one per article by schema)
-        .join(
-            Embedding,
-            Embedding.article_id == Article.id,
-            isouter=True,
-        )
+        .join(Embedding, Embedding.article_id == Article.id, isouter=True)
     )
 
-    # If cluster run_id is specified, bring cluster label via ArticleCluster -> Cluster
     if run_id is not None:
         q = q.add_columns(
             Cluster.run_id.label("cluster_run_id"),
             Cluster.label.label("cluster_label"),
-        ).join(
-            ArticleCluster,
-            ArticleCluster.article_id == Article.id,
-            isouter=True,
+        ).join(ArticleCluster, ArticleCluster.article_id == Article.id, isouter=True
         ).join(
             Cluster,
             and_(
@@ -139,7 +146,6 @@ def _fetch_rows(
             isouter=True,
         )
 
-    # Filters
     if source:
         q = q.where(Article.source == source)
     if status:
@@ -150,11 +156,9 @@ def _fetch_rows(
 
     q = q.order_by(Article.first_seen_at.desc()).limit(n)
 
-    rows = []
+    rows: List[Dict[str, Any]] = []
     for row in sess.execute(q).all():
-        row = row._mapping  # name-based access
-
-        # Derive embedding dim if vector present (vector is JSON list[float] on SQLite)
+        row = row._mapping
         embed_vec = row.get("embed_vector")
         embed_dim = len(embed_vec) if isinstance(embed_vec, list) else None
 
@@ -185,6 +189,7 @@ def _fetch_rows(
                 "created_at": iso(row.get("embed_created_at")),
                 "dim": embed_dim,
             },
+            "cluster": None,
         }
 
         if run_id is not None:
@@ -192,12 +197,117 @@ def _fetch_rows(
                 "run_id": row.get("cluster_run_id"),
                 "label": row.get("cluster_label"),
             }
-        else:
-            payload["cluster"] = None
 
         rows.append(payload)
 
     return rows
+
+
+def _fetch_clusters_with_articles(
+    sess,
+    run_id: int,
+    cluster_label_filter: Optional[str],
+    min_cluster_size: int,
+    per_cluster: int,
+    include_summary_text: bool,
+    summary_chars: int,
+) -> Tuple[List[Dict[str, Any]], int]:
+    """
+    Return a list of clusters with their member articles.
+
+    Structure:
+    [
+      {
+        "label": "Earnings Season",
+        "run_id": 1695...,
+        "size": 12,
+        "articles": [
+          { "id": ..., "title": ..., "url": ..., "published_at": ..., "summary": "..." },
+          ...
+        ]
+      },
+      ...
+    ]
+    """
+    if run_id is None:
+        return [], 0
+
+    sq_latest_summary, S = _latest_summary_alias()
+
+    # Get all cluster memberships for this run, along with article metadata and latest summary fields
+    q = (
+        select(
+            Cluster.label.label("cluster_label"),
+            Cluster.run_id.label("run_id"),
+            Article.id.label("article_id"),
+            Article.title.label("title"),
+            Article.url.label("url"),
+            Article.published_at.label("published_at"),
+            S.summary_text.label("summary_text"),
+        )
+        .join(ArticleCluster, Cluster.id == ArticleCluster.cluster_id)
+        .join(Article, ArticleCluster.article_id == Article.id)
+        .join(sq_latest_summary, sq_latest_summary.c.article_id == Article.id, isouter=True)
+        .join(
+            S,
+            and_(
+                S.article_id == sq_latest_summary.c.article_id,
+                S.created_at == sq_latest_summary.c.max_created,
+            ),
+            isouter=True,
+        )
+        .where(Cluster.run_id == run_id)
+        .order_by(Cluster.label.asc(), desc(Article.published_at))
+    )
+
+    if cluster_label_filter:
+        like = f"%{cluster_label_filter.lower()}%"
+        # case-insensitive filter; SQLite uses lower() function
+        q = q.where(func.lower(Cluster.label).like(like))
+
+    rows = sess.execute(q).all()
+
+    # Group members by cluster
+    grouped: DefaultDict[str, List[Dict[str, Any]]] = defaultdict(list)
+    for r in rows:
+        m = r._mapping
+        grouped[m["cluster_label"]].append(
+            {
+                "id": m["article_id"],
+                "title": m["title"],
+                "url": m["url"],
+                "published_at": iso(m["published_at"]),
+                "summary": None if not include_summary_text else (
+                    (m["summary_text"] or "").strip().replace("\n", " ")
+                ),
+            }
+        )
+
+    # Build cluster list with counts and apply min size & per-cluster limits
+    clusters: List[Dict[str, Any]] = []
+    total_articles = 0
+    for label, members in sorted(grouped.items(), key=lambda kv: kv[0].lower()):
+        if len(members) < min_cluster_size:
+            continue
+        # Limit members
+        trimmed = members[: max(1, per_cluster)]
+        total_articles += len(trimmed)
+        # Truncate summary if needed
+        if include_summary_text and summary_chars and summary_chars > 0:
+            for m in trimmed:
+                if m["summary"]:
+                    if len(m["summary"]) > summary_chars:
+                        m["summary"] = m["summary"][:summary_chars] + "…"
+        clusters.append(
+            {
+                "label": label,
+                "run_id": run_id,
+                "size": len(members),
+                "articles": trimmed,
+            }
+        )
+
+    return clusters, total_articles
 
 
 def main():
@@ -215,16 +325,53 @@ def main():
     ap.add_argument("--summary-chars", type=int, default=280, help="Chars to show from summary preview (default: 280)")
 
     # Cluster selection
-    ap.add_argument("--latest-run", action="store_true", help="Show cluster label from the most recent run")
-    ap.add_argument("--run-id", type=int, help="Show cluster label from a specific run_id")
+    ap.add_argument("--latest-run", action="store_true", help="Use the most recent clusters run")
+    ap.add_argument("--run-id", type=int, help="Use a specific cluster run_id")
+
+    # NEW: Group-by-cluster mode
+    ap.add_argument("--group-by-cluster", action="store_true", help="Group output by cluster label")
+    ap.add_argument("--per-cluster", type=int, default=5, help="Max articles per cluster to print (default: 5)")
+    ap.add_argument("--min-cluster-size", type=int, default=1, help="Only print clusters with at least this many members")
+    ap.add_argument("--cluster-label", type=str, help="Filter clusters whose label contains this substring (case-insensitive)")
 
     args = ap.parse_args()
 
     with session_scope() as s:
+        # Resolve run_id if needed
         run_id = args.run_id
         if args.latest_run and run_id is None:
             run_id = _latest_cluster_run_id(s)
 
+        if args.group_by_cluster:
+            if run_id is None:
+                print("⚠️  --group-by-cluster requires --latest-run or --run-id")
+                return
+            clusters, total = _fetch_clusters_with_articles(
+                s,
+                run_id=run_id,
+                cluster_label_filter=args.cluster_label,
+                min_cluster_size=args.min_cluster_size,
+                per_cluster=args.per_cluster,
+                include_summary_text=args.show_summary,
+                summary_chars=args.summary_chars,
+            )
+            if not clusters:
+                print(f"[cluster run_id={run_id}] No clusters found (check --cluster-label or --min-cluster-size).")
+                return
+
+            print(f"[cluster run_id={run_id}] Showing up to {args.per_cluster} articles per cluster\n")
+            for c in clusters:
+                print(f"## {c['label']}  (size={c['size']})")
+                for m in c["articles"]:
+                    pub = m["published_at"] or "NA"
+                    print(f"- {m['title']}  [{pub}]")
+                    print(f"  {m['url']}")
+                    if args.show_summary and m["summary"]:
+                        print(f"  SUMMARY: {m['summary']}")
+                print("-" * 100)
+            return
+
+        # Default (original) flat listing
         rows = _fetch_rows(
             s,
             n=args.n,
@@ -236,7 +383,6 @@ def main():
 
     if args.json:
         for r in rows:
-            # Optionally truncate previews in JSON too (keeps payload light)
             if not args.show_body and r["article"].get("body_text") is not None:
                 r["article"]["body_text"] = None
             if not args.show_summary and r["summary"].get("text") is not None:
@@ -266,7 +412,6 @@ def main():
         if a.get("canonical_url"):
             print(f"  CANON: {a['canonical_url']}")
 
-        # Summary line
         if s["model"]:
             print(f"  SUMMARY: {s['model']}@{s['provider']}  at {s['created_at']}")
             if args.show_summary and s["text"]:
@@ -277,20 +422,17 @@ def main():
         else:
             print("  SUMMARY: (none)")
 
-        # Embedding line
         if e["exists"]:
             dim = e["dim"] if e["dim"] is not None else "?"
             print(f"  EMBEDDING: {e['model']}@{e['provider']}  dim={dim}  at {e['created_at']}")
         else:
             print("  EMBEDDING: (none)")
 
-        # Cluster line
         if c and c.get("run_id") is not None:
             print(f"  CLUSTER: run_id={c['run_id']}  label={c['label']}")
         else:
             print("  CLUSTER: (none)")
 
-        # Body preview
         if args.show_body and a.get("body_text"):
             body = (a["body_text"] or "").strip().replace("\n", " ")
             if len(body) > args.body_chars:

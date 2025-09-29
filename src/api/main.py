@@ -244,7 +244,7 @@ def search(
     page_size: int = Query(20, ge=1, le=200),
     window_hours: int = Query(DEFAULT_WINDOW_HOURS, ge=1, le=365 * 24),
     use_latest_run: bool = Query(True, description="Attach cluster label from latest run"),
-    min_score: float = Query(1e-6, ge=0.3, description="Filter out hits with score < min_score"),
+    min_score: float = Query(0.2, ge=0.2, description="Filter out hits with score < min_score"),
     debug_include_zero: bool = Query(False, description="If true, do not filter low/zero score hits"),
 ):
     """

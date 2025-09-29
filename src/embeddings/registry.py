@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import time
 from dataclasses import dataclass
-from typing import List, Optional, Any
+from typing import List, Optional, Any, Callable
 
 @dataclass
 class EmbeddingConfig:
@@ -15,6 +15,24 @@ class EmbeddingConfig:
     batch_size: int = 512                    # tune if you hit 413/429
     normalize: bool = True                   # L2-normalize vectors
     truncate_tokens: Optional[int] = 8192    # safety cap; model supports up to 8192
+
+@dataclass
+class RunParams:
+    """
+    Parameters controlling a single embedding run.
+    """
+    limit: Optional[int] = None         # max number of articles
+    since_hours: Optional[float] = None # restrict to recent articles
+    progress_cb: Optional[Callable] = None  # callback for progress reporting
+
+    # Input source: full article text or summary
+    embed_source: str = "article"       # "article" or "summary"
+
+    # How to handle long texts
+    long_text_mode: str = "truncate"    # "truncate" or "chunk"
+    max_tokens: int = 7500              # for truncate mode
+    chunk_tokens: int = 2000            # for chunk mode
+    overlap_tokens: int = 200           # overlap between chunks
 
 
 def _l2_normalize(v):
